@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>FiduPro – Publier une mise à jour</title>
+<style>
+  :root{--bg:#f4f6fb;--card:#fff;--txt:#0f172a;--mut:#566079;--acc:#5b5fef;--ok:#059669;--err:#dc2626;--line:#d9deee}
+  @media (prefers-color-scheme:dark){:root{--bg:#0e1128;--card:#171b3a;--txt:#eef0ff;--mut:#9aa3c7;--line:#2a2f5a}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.5 "Segoe UI",system-ui,sans-serif;padding:24px}
+  .carte{max-width:640px;margin:0 auto;background:var(--card);border:1px solid var(--line);padding:28px}
+  h1{font-size:22px;margin:0 0 4px}
+  p.sub{color:var(--mut);margin:0 0 20px}
+  label{display:block;font-weight:600;margin:14px 0 4px}
+  input[type=text],input[type=password],input[type=file]{width:100%;padding:10px;border:1px solid var(--line);background:transparent;color:var(--txt);font:inherit}
+  input:focus{outline:2px solid var(--acc)}
+  small{color:var(--mut)}
+  button{margin-top:20px;width:100%;padding:13px;border:0;background:var(--acc);color:#fff;font:600 16px inherit;cursor:pointer}
+  button:disabled{opacity:.5;cursor:wait}
+  details{margin-top:16px}
+  summary{cursor:pointer;color:var(--mut)}
+  #journal{margin-top:20px;font:13px/1.6 Consolas,monospace;white-space:pre-wrap}
+  .ok{color:var(--ok)}.err{color:var(--err)}.aff{font-weight:600}
+  a{color:var(--acc)}
+</style>
+</head>
+<body>
+<div class="carte">
+  <h1>Publier une mise à jour FiduPro</h1>
+  <p class="sub">Page à ouvrir <b>sur ton PC seulement</b> (double-clic sur le fichier). Ne la mets pas en ligne.</p>
+
+  <label for="token">Jeton GitHub (token)</label>
+  <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="github_pat_...">
+  <small>Gardé seulement dans cet onglet : il disparaît quand tu fermes la page.</small>
+
+  <label for="version">Numéro de version</label>
+  <input id="version" type="text" placeholder="1.0.2" inputmode="decimal">
+  <small>Plus grand que la version installée chez les clients.</small>
+
+  <label for="notes">Note courte</label>
+  <input id="notes" type="text" placeholder="Correctifs">
+
+  <label for="fichier">Fichier compilé (client.exe)</label>
+  <input id="fichier" type="file" accept=".exe">
+
+  <details>
+    <summary>Réglages avancés</summary>
+    <label for="depotVersions">Dépôt PUBLIC des versions (propriétaire/nom)</label>
+    <input id="depotVersions" type="text" value="jockerwink/fidupr">
+    <label for="depotSite">Dépôt du site (où se trouve v2.json)</label>
+    <input id="depotSite" type="text" value="jockerwink/web">
+    <label for="cheminJson">Chemin du fichier JSON dans le dépôt du site</label>
+    <input id="cheminJson" type="text" value="v2.json">
+    <label for="urlSite">Adresse publique du JSON</label>
+    <input id="urlSite" type="text" value="https://jockerwink.com/v2.json">
+  </details>
+
+  <button id="go">Publier la mise à jour</button>
+  <div id="journal" role="status" aria-live="polite"></div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const J = $("journal");
+const ecrire = (t, cls) => { const s = document.createElement("div"); if (cls) s.className = cls; s.textContent = t; J.appendChild(s); };
+const API = "https://api.github.com";
+
+async function gh(url, token, opts = {}) {
+  const r = await fetch(url, { ...opts, headers: {
+    "Authorization": "Bearer " + token,
+    "Accept": "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+    ...(opts.headers || {}) } });
+  const txt = await r.text();
+  let data = null; try { data = txt ? JSON.parse(txt) : null; } catch (e) { data = { message: txt }; }
+  if (!r.ok) { const e = new Error((data && data.message) || ("Erreur " + r.status)); e.status = r.status; e.data = data; throw e; }
+  return data;
+}
+
+const hex = buf => [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
+const b64 = txt => btoa(unescape(encodeURIComponent(txt)));
+
+async function publier() {
+  J.textContent = "";
+  const token = $("token").value.trim();
+  const version = $("version").value.trim();
+  const notes = $("notes").value.trim();
+  const fichier = $("fichier").files[0];
+  const dv = $("depotVersions").value.trim();
+  const ds = $("depotSite").value.trim();
+  const chemin = $("cheminJson").value.trim();
+  const urlSite = $("urlSite").value.trim();
+
+  if (!token) return ecrire("Colle ton jeton GitHub.", "err");
+  if (!/^\d+(\.\d+){1,3}$/.test(version)) return ecrire("Version attendue sous la forme 1.0.2", "err");
+  if (!fichier) return ecrire("Choisis le fichier client.exe.", "err");
+  if (!/\.exe$/i.test(fichier.name)) return ecrire("Le fichier doit être un .exe.", "err");
+  if (!/^[\w.-]+\/[\w.-]+$/.test(dv) || !/^[\w.-]+\/[\w.-]+$/.test(ds)) return ecrire("Dépôt invalide (format : propriétaire/nom).", "err");
+  if (!confirm("Publier la version " + version + " ?\nCela remplacera le fichier " + chemin + " du site " + ds + ".")) return;
+
+  $("go").disabled = true;
+  try {
+    ecrire("1/5  Vérification du dépôt des versions...");
+    const depot = await gh(`${API}/repos/${dv}`, token);
+    if (depot.private) throw new Error("Le dépôt " + dv + " est PRIVÉ : tes clients ne pourront pas télécharger. Passe-le en Public.");
+    ecrire("     dépôt public : OK", "ok");
+
+    ecrire("2/5  Calcul de l’empreinte SHA-256 (" + (fichier.size / 1048576).toFixed(1) + " Mo)...");
+    const sha = hex(await crypto.subtle.digest("SHA-256", await fichier.arrayBuffer()));
+    ecrire("     " + sha, "ok");
+
+    ecrire("3/5  Création de la release v" + version + "...");
+    let release;
+    try {
+      release = await gh(`${API}/repos/${dv}/releases`, token, { method: "POST",
+        body: JSON.stringify({ tag_name: "v" + version, name: "v" + version, body: notes, draft: false, prerelease: false }) });
+    } catch (e) {
+      if (e.status === 422) throw new Error("La version v" + version + " existe déjà. Choisis un nouveau numéro.");
+      throw e;
+    }
+    ecrire("     release créée", "ok");
+
+    ecrire("4/5  Envoi de " + fichier.name + " (patiente, ne ferme pas la page)...");
+    const up = `https://uploads.github.com/repos/${dv}/releases/${release.id}/assets?name=${encodeURIComponent("client.exe")}`;
+    const asset = await gh(up, token, { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: fichier });
+    const urlExe = asset.browser_download_url;
+    ecrire("     " + urlExe, "ok");
+
+    ecrire("5/5  Mise à jour de " + chemin + " dans " + ds + "...");
+    const manifeste = JSON.stringify({ version, url: urlExe, sha256: sha, notes }, null, 2) + "\n";
+    const cible = `${API}/repos/${ds}/contents/${chemin.split("/").map(encodeURIComponent).join("/")}`;
+    let shaFichier;
+    try { shaFichier = (await gh(cible, token)).sha; } catch (e) { if (e.status !== 404) throw e; }
+    await gh(cible, token, { method: "PUT", body: JSON.stringify({
+      message: "Mise à jour FiduPro " + version, content: b64(manifeste), ...(shaFichier ? { sha: shaFichier } : {}) }) });
+    ecrire("     fichier du site mis à jour", "ok");
+
+    ecrire("");
+    ecrire("Terminé. Attends 1 à 2 minutes que le site se republie, puis vérifie :", "aff ok");
+    const a = document.createElement("a"); a.href = urlSite + "?t=" + Date.now(); a.target = "_blank"; a.rel = "noopener"; a.textContent = urlSite;
+    J.appendChild(a);
+    ecrire("");
+    ecrire("Tu dois y lire la version " + version + " et l’empreinte " + sha.slice(0, 12) + "...");
+    ecrire("Ne recompile pas : l’empreinte ne correspondrait plus.", "err");
+  } catch (e) {
+    ecrire("ÉCHEC : " + e.message, "err");
+    if (e.status === 401 || e.status === 403) ecrire("Vérifie le jeton : droits « Contents : Read and write » sur les deux dépôts, et qu’il n’a pas expiré.");
+    if (e.message === "Failed to fetch") ecrire("Connexion bloquée : vérifie ta connexion internet.");
+  } finally {
+    $("go").disabled = false;
+  }
+}
+$("go").addEventListener("click", publier);
+</script>
+</body>
+</html>
